@@ -91,17 +91,18 @@ def main():
         return
 
     # Define category folders.
+    # Extensions are sorted alphabetically for easy maintenance.
     folders = {
-        "1 - ARCHIVES": [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"],
-        "2 - DOCUMENTS": [".doc", ".ris", ".ttl", ".docx", ".txt", ".xlsx", ".ppt", ".csv", ".pptx", ".md"],
-        "3 - IMAGES": [".jpeg", ".jpg", ".png", ".gif", ".bmp", ".heic", ".tiff", ".svg"],
+        "1 - ARCHIVES": [".7z", ".bz2", ".dmp", ".gz", ".iso", ".rar", ".tar", ".torrent", ".xz", ".zip"],
+        "2 - DOCUMENTS": [".bib", ".csv", ".dic", ".doc", ".docx", ".epub", ".htm", ".md", ".pages", ".ppt", ".pptx", ".ps", ".ris", ".ttl", ".txt", ".xls", ".xlsx"],
+        "3 - IMAGES": [".bmp", ".gif", ".heic", ".jpeg", ".jpg", ".png", ".svg", ".tiff", ".webp"],
         "4 - PDFs": [".pdf"],
-        "5 - VIDEOS": [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv"],
+        "5 - VIDEOS": [".avi", ".flv", ".mkv", ".mov", ".mp4", ".wmv"],
         "6 - FOLDERS": [],
-        "7 - CODING": [".py", ".java", ".cpp", ".c", ".html", ".css", ".js", ".php",
-                         ".tsx", ".ts", ".yaml", ".yml", ".json"],
-        "8 - INSTALLERS & APPLICATIONS": [".exe"],
-        "9 - OTHERS": []
+        "7 - CODING": [".bat", ".c", ".cpp", ".css", ".gexf", ".har", ".html", ".java", ".js", ".json", ".php", ".ps1", ".py", ".sh", ".sqlite3", ".ts", ".tsx", ".xml", ".yaml", ".yml", ".ipynb"],
+        "8 - INSTALLERS & APPLICATIONS": [".apk", ".bin", ".dll", ".dmg", ".exe", ".jar", ".msi"],
+        "9 - SECURITY": [".cer"],
+        "10 - OTHERS": [] # Renumbered
     }
 
     # Create all category folders.
@@ -112,13 +113,18 @@ def main():
     # Process files.
     for item in list(base_folder.iterdir()):
         if item.is_file():
+            # Special case for .ipynb which might not have a clean suffix extraction in all cases.
+            ext_lower = item.suffix.lower()
+            if "ipynb" in item.name.lower() and ext_lower != ".ipynb":
+                ext_lower = ".ipynb"
+            
             destination = None
             for folder_name, exts in folders.items():
                 if exts and item.suffix.lower() in {ext.lower() for ext in exts}:
                     destination = base_folder / folder_name
                     break
             if not destination:
-                destination = base_folder / "9 - OTHERS"
+                destination = base_folder / "10 - OTHERS" 
             move_and_rename_file(item, destination)
 
     # Process directories not matching category names.
