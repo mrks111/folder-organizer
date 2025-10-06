@@ -1,142 +1,341 @@
-import os, shutil, hashlib, logging, re
+import os
+import shutil
+import hashlib
+import logging
+import re
+import sys
+import subprocess
 from pathlib import Path
-from tkinter import Tk, filedialog
+from collections import defaultdict
 
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+# --- Dependency Installation ---
+# This block checks for the 'inquirer' library and installs it if it's missing.
+try:
+    import inquirer
+except ImportError:
+    print("Required library 'inquirer' not found. Attempting to install...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "inquirer"])
+        print("'inquirer' installed successfully.")
+        import inquirer
+    except Exception as e:
+        print(f"Error: Failed to install 'inquirer'. {e}")
+        print("Please install it manually by running: pip install inquirer")
+        sys.exit(1)
+
+# Import tkinter for the GUI folder dialog
+# This will be the ONLY method used for folder selection.
+from tkinter import Tk, filedialog, TclError
+
+# --- Script Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("file_organizer.log"),
+        logging.StreamHandler()
+    ]
+)
+
+def auto_skip_script(files_to_skip: list) -> list:
+    """
+    Automatically adds the script's own filename to the list of files to be skipped
+    to prevent it from being moved.
+    """
+    try:
+        script_name = os.path.basename(__file__)
+        if script_name not in files_to_skip:
+            logging.info(f"Automatically skipping the script itself: {script_name}")
+            files_to_skip.append(script_name)
+    except NameError:
+        # This fallback is for environments where __file__ might not be defined
+        logging.warning("Could not determine the script's name to auto-skip it.")
+    return files_to_skip
 
 def select_folder() -> Path:
-    root = Tk()
-    root.withdraw()
-    folder = filedialog.askdirectory(title="Select Folder to Organize")
-    if folder:
-        logging.debug(f"Selected folder: {folder}")
-        return Path(folder)
-    logging.debug("No folder selected")
-    return None
+    """
+    Opens a GUI window using tkinter to select the folder to organize.
+    If the GUI cannot be displayed, it will exit with an error.
+    """
+    print("Attempting to open the graphical folder selection dialog...")
+    try:
+        root = Tk()
+        root.withdraw()  # Hide the main tkinter window
+        # Force the dialog to the front
+        root.attributes("-topmost", True)
+        
+        print("A folder selection window should now be open. It may be behind other windows.")
+        folder = filedialog.askdirectory(title="Select Folder to Organize")
+        
+        root.destroy() # Clean up the tkinter instance
+
+        if folder:
+            print(f"Folder selected: {folder}")
+            logging.debug(f"Selected folder: {folder}")
+            return Path(folder)
+        else:
+            # This block runs if the user closes the dialog window
+            logging.info("No folder was selected from the dialog.")
+            return None
+            
+    except TclError as e:
+        print("\n--- CRITICAL ERROR ---")
+        print("Could not open the graphical folder selection window.")
+        print("This script requires a desktop environment to run.")
+        print("It cannot be run in a text-only terminal (like a basic SSH session).")
+        logging.error(f"Tkinter failed to initialize: {e}")
+        return None
+    except Exception as e:
+        print(f"\nAn unexpected error occurred during folder selection: {e}")
+        logging.error(f"An unexpected error occurred in select_folder: {e}")
+        return None
+
+
+def get_user_choices(base_folder: Path) -> (list, list):
+    """
+    Asks the user which files and folders to skip using an interactive list.
+    """
+    all_items = [item for item in base_folder.iterdir()]
+    files_to_consider = sorted([f.name for f in all_items if f.is_file()])
+    folders_to_consider = sorted([f.name for f in all_items if f.is_dir() and not f.name.startswith('.')])
+
+    if not files_to_consider and not folders_to_consider:
+        return [], []
+
+    questions = [
+        inquirer.Checkbox('files_to_skip',
+                          message="Select files to SKIP (use arrow keys, space to select, enter to confirm)",
+                          choices=files_to_consider),
+        inquirer.Checkbox('folders_to_skip',
+                          message="Select folders to SKIP",
+                          choices=folders_to_consider)
+    ]
+    answers = inquirer.prompt(questions)
+    if not answers: # Handle Ctrl+C
+        return [], []
+    return answers.get('files_to_skip', []), answers.get('folders_to_skip', [])
+
 
 def compute_hash(fp: Path, chunk_size=65536) -> str:
     h = hashlib.sha256()
-    with fp.open("rb") as f:
-        while chunk := f.read(chunk_size):
-            h.update(chunk)
-    return h.hexdigest()
+    try:
+        with fp.open("rb") as f:
+            while chunk := f.read(chunk_size):
+                h.update(chunk)
+        return h.hexdigest()
+    except (IOError, OSError) as e:
+        logging.error(f"Could not read file {fp} to compute hash: {e}")
+        return None
+
+
+def handle_duplicates(base_folder: Path) -> int:
+    """
+    Finds and deletes duplicate files based on their hash.
+    It prioritizes keeping files without '(x)' in their name.
+    """
+    logging.info("Scanning for duplicate files...")
+    hashes = defaultdict(list)
+    for item in base_folder.rglob('*'):
+        if item.is_file():
+            file_hash = compute_hash(item)
+            if file_hash:
+                hashes[file_hash].append(item)
+
+    duplicates_deleted = 0
+    for file_hash, file_paths in hashes.items():
+        if len(file_paths) > 1:
+            originals = [p for p in file_paths if not re.search(r'\(\d+\)', p.stem)]
+            
+            if not originals:
+                originals.append(file_paths[0]) # If no clear original, keep the first one
+            
+            duplicates_to_delete = [p for p in file_paths if p not in originals]
+
+            if duplicates_to_delete:
+                logging.info(f"Duplicate found for: {originals[0].name}")
+                for dup in duplicates_to_delete:
+                    try:
+                        dup.unlink()
+                        logging.info(f"  - Deleted duplicate: {dup.name}")
+                        duplicates_deleted += 1
+                    except OSError as e:
+                        logging.error(f"Could not delete duplicate file {dup}: {e}")
+    
+    return duplicates_deleted
+
 
 def ensure_folder_exists(folder: Path) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     logging.debug(f"Ensured folder exists: {folder}")
 
+
 def get_target_filename(src: Path) -> str:
-    # Properize PDFs: title-case the stem, lowercase extension.
     if src.suffix.lower() == ".pdf":
         stem, ext = os.path.splitext(src.name)
         return f"{stem.title()}{ext.lower()}"
     return src.name
 
-def move_and_rename_file(src: Path, dest_folder: Path) -> None:
+
+def move_and_rename_file(src: Path, dest_folder: Path) -> bool:
     src = src.resolve()
     dest_folder = dest_folder.resolve()
     base = get_target_filename(src)
     target = dest_folder / base
     logging.debug(f"Processing file: {src} -> {target}")
+
     if target.exists():
         logging.debug(f"Conflict: {target} exists")
         if compute_hash(target) == compute_hash(src):
-            logging.debug("Duplicate detected; removing source")
+            logging.info(f"Duplicate of '{target.name}' found. Deleting source: {src.name}")
             src.unlink()
-            return
+            return False
+        
         stem, ext = os.path.splitext(base)
         counter = 1
         while True:
             candidate = dest_folder / f"{stem}_{counter}{ext}"
-            if candidate.exists():
-                if compute_hash(candidate) == compute_hash(src):
-                    logging.debug("Duplicate candidate found; removing source")
-                    src.unlink()
-                    return
-                counter += 1
-            else:
+            if not candidate.exists():
                 target = candidate
                 break
-    shutil.move(str(src), str(target))
-    logging.debug(f"Moved file to: {target}")
+            counter += 1
+    
+    try:
+        shutil.move(str(src), str(target))
+        logging.debug(f"Moved file to: {target}")
+        return True
+    except (shutil.Error, OSError) as e:
+        logging.error(f"Could not move file {src} to {target}: {e}")
+        return False
 
-def move_folder(src: Path, dest_parent: Path) -> None:
+
+def move_folder(src: Path, dest_parent: Path) -> bool:
     src = src.resolve()
     dest_parent = dest_parent.resolve()
-    target = dest_parent / src.name  # Retain original name.
-    logging.debug(f"Processing folder: {src} -> {target}")
+    target = dest_parent / src.name
+
     if target.exists():
         logging.debug(f"Folder conflict: {target}")
         counter = 1
         while (dest_parent / f"{src.name}_{counter}").exists():
             counter += 1
         target = dest_parent / f"{src.name}_{counter}"
-    shutil.move(str(src), str(target))
-    logging.debug(f"Moved folder to: {target}")
+    
+    try:
+        shutil.move(str(src), str(target))
+        logging.debug(f"Moved folder to: {target}")
+        return True
+    except (shutil.Error, OSError) as e:
+        logging.error(f"Could not move folder {src} to {target}: {e}")
+        return False
 
-def refine_sorting(base_folder: Path) -> None:
-    # Move coding-related files from "9 - OTHERS" to "7 - CODING"
-    others_folder = base_folder / "9 - OTHERS"
+
+def refine_sorting(base_folder: Path, summary: dict):
+    others_folder = base_folder / "10 - OTHERS"
     coding_folder = base_folder / "7 - CODING"
     refine_exts = {".json", ".tsx", ".ts", ".yaml", ".yml"}
-    if others_folder.exists():
+    if others_folder.exists() and coding_folder.exists():
         for item in list(others_folder.iterdir()):
             if item.is_file() and item.suffix.lower() in refine_exts:
-                logging.debug(f"Refining: moving {item.name} from 9 - OTHERS to 7 - CODING")
-                move_and_rename_file(item, coding_folder)
+                logging.debug(f"Refining: moving {item.name} from 10 - OTHERS to 7 - CODING")
+                if move_and_rename_file(item, coding_folder):
+                    summary['files_moved'] += 1
+
 
 def main():
     base_folder = select_folder()
     if not base_folder:
+        print("No folder selected or GUI failed to open. Exiting.")
         return
 
-    # Define category folders.
-    # Extensions are sorted alphabetically for easy maintenance.
-    folders = {
-        "1 - ARCHIVES": [".7z", ".bz2", ".dmp", ".gz", ".iso", ".rar", ".tar", ".torrent", ".xz", ".zip"],
-        "2 - DOCUMENTS": [".bib", ".csv", ".dic", ".doc", ".docx", ".epub", ".htm", ".md", ".pages", ".ppt", ".pptx", ".ps", ".ris", ".ttl", ".txt", ".xls", ".xlsx"],
-        "3 - IMAGES": [".bmp", ".gif", ".heic", ".jpeg", ".jpg", ".png", ".svg", ".tiff", ".webp"],
-        "4 - PDFs": [".pdf"],
-        "5 - VIDEOS": [".avi", ".flv", ".mkv", ".mov", ".mp4", ".wmv"],
-        "6 - FOLDERS": [],
-        "7 - CODING": [".bat", ".c", ".cpp", ".css", ".gexf", ".har", ".html", ".java", ".js", ".json", ".php", ".ps1", ".py", ".sh", ".sqlite3", ".ts", ".tsx", ".xml", ".yaml", ".yml", ".ipynb"],
-        "8 - INSTALLERS & APPLICATIONS": [".apk", ".bin", ".dll", ".dmg", ".exe", ".jar", ".msi"],
-        "9 - SECURITY": [".cer"],
-        "10 - OTHERS": [] # Renumbered
+    summary = {
+        'files_moved': 0,
+        'folders_moved': 0,
+        'duplicates_deleted': 0,
+        'files_skipped': 0,
+        'folders_skipped': 0,
     }
 
-    # Create all category folders.
-    for folder_name in folders:
-        ensure_folder_exists(base_folder / folder_name)
-    defined_categories = set(folders.keys())
+    questions = [
+        inquirer.List('action',
+                      message="What would you like to do?",
+                      choices=['Organize Files and Folders', 'Find and Delete Duplicates', 'Do Both', 'Exit'],
+                      ),
+    ]
+    answers = inquirer.prompt(questions)
+    if not answers or answers['action'] == 'Exit': # Handle Ctrl+C or Exit choice
+        print("Exiting.")
+        return
+    
+    action_choice = answers['action']
 
-    # Process files.
-    for item in list(base_folder.iterdir()):
-        if item.is_file():
-            # Special case for .ipynb which might not have a clean suffix extraction in all cases.
-            ext_lower = item.suffix.lower()
-            if "ipynb" in item.name.lower() and ext_lower != ".ipynb":
-                ext_lower = ".ipynb"
-            
-            destination = None
-            for folder_name, exts in folders.items():
-                if exts and item.suffix.lower() in {ext.lower() for ext in exts}:
-                    destination = base_folder / folder_name
-                    break
-            if not destination:
-                destination = base_folder / "10 - OTHERS" 
-            move_and_rename_file(item, destination)
+    if 'Duplicate' in action_choice or 'Both' in action_choice:
+        summary['duplicates_deleted'] = handle_duplicates(base_folder)
 
-    # Process directories not matching category names.
-    for item in list(base_folder.iterdir()):
-        if item.is_dir() and item.name not in defined_categories:
-            dest = base_folder / "6 - FOLDERS"
-            ensure_folder_exists(dest)
-            move_folder(item, dest)
-        else:
-            logging.debug(f"Preserving category folder: {item.name}")
+    if 'Organize' in action_choice or 'Both' in action_choice:
+        files_to_skip, folders_to_skip = get_user_choices(base_folder)
+        
+        # --- IMPLEMENTATION OF THE NEW FUNCTION ---
+        # This line automatically adds the script to the skip list.
+        files_to_skip = auto_skip_script(files_to_skip)
 
-    refine_sorting(base_folder)
+        summary['files_skipped'] = len(files_to_skip)
+        summary['folders_skipped'] = len(folders_to_skip)
+
+        folders = {
+            "1 - ARCHIVES": [".7z", ".bz2", ".dmp", ".gz", ".iso", ".rar", ".tar", ".torrent", ".xz", ".zip"],
+            "2 - DOCUMENTS": [".bib", ".csv", ".dic", ".doc", ".docx", ".epub", ".htm", ".md", ".pages", ".ppt", ".pptx", ".ps", ".ris", ".ttl", ".txt", ".xls", ".xlsx"],
+            "3 - IMAGES": [".bmp", ".gif", ".heic", ".jpeg", ".jpg", ".png", ".svg", ".tiff", ".webp"],
+            "4 - PDFs": [".pdf"],
+            "5 - VIDEOS": [".avi", ".flv", ".mkv", ".mov", ".mp4", ".wmv"],
+            "6 - FOLDERS": [],
+            "7 - CODING": [".bat", ".c", ".cpp", ".css", ".gexf", ".har", ".html", ".java", ".js", ".json", ".php", ".ps1", ".py", ".sh", ".sqlite3", ".ts", ".tsx", ".xml", ".yaml", ".yml", ".ipynb"],
+            "8 - INSTALLERS & APPLICATIONS": [".apk", ".bin", ".dll", ".dmg", ".exe", ".jar", ".msi"],
+            "9 - SECURITY": [".cer"],
+            "10 - OTHERS": []
+        }
+
+        for folder_name in folders:
+            ensure_folder_exists(base_folder / folder_name)
+        defined_categories = set(folders.keys())
+
+        for item in list(base_folder.iterdir()):
+            if item.name in files_to_skip or item.name in folders_to_skip:
+                continue
+
+            if item.is_file():
+                ext_lower = item.suffix.lower()
+                if "ipynb" in item.name.lower() and ext_lower != ".ipynb":
+                    ext_lower = ".ipynb"
+                
+                destination = None
+                for folder_name, exts in folders.items():
+                    if exts and ext_lower in {ext.lower() for ext in exts}:
+                        destination = base_folder / folder_name
+                        break
+                if not destination:
+                    destination = base_folder / "10 - OTHERS"
+                
+                if move_and_rename_file(item, destination):
+                    summary['files_moved'] += 1
+
+        for item in list(base_folder.iterdir()):
+            if item.is_dir() and item.name not in defined_categories and item.name not in folders_to_skip:
+                dest = base_folder / "6 - FOLDERS"
+                ensure_folder_exists(dest)
+                if move_folder(item, dest):
+                    summary['folders_moved'] += 1
+        
+        refine_sorting(base_folder, summary)
+
+    print("\n--- Organization Summary ---")
+    print(f"Files Moved: {summary['files_moved']}")
+    print(f"Folders Moved: {summary['folders_moved']}")
+    print(f"Duplicate Files Deleted: {summary['duplicates_deleted']}")
+    print(f"Files Skipped: {summary['files_skipped']}")
+    print(f"Folders Skipped: {summary['folders_skipped']}")
+    print("--------------------------")
+    print(f"Log file with detailed operations is available at: {Path('file_organizer.log').resolve()}")
+
 
 if __name__ == "__main__":
     main()
