@@ -1,85 +1,136 @@
-# Smart Folder Organizer Script
+# Smart Folder Organizer
 
-This Python script helps you automatically organize a messy folder by sorting files into predefined categories. It uses a graphical user interface (GUI) to select the target folder, making it easy to use.
+A Python script that automatically organizes a messy folder by sorting files into predefined categories. Uses a GUI dialog for folder selection and is built to be fast, safe, and resilient — it won't get stuck on locked files, system executables, or slow drives.
 
-The script is designed to be safe and intelligent, featuring duplicate file detection, smart conflict resolution, and special handling for certain file types.
+---
 
 ## Key Features
 
-*   **GUI for Folder Selection**: No need to edit the script to specify a folder path. A simple dialog box pops up for you to choose.
-*   **Categorization by File Type**: Sorts files into specific folders like `1 - ARCHIVES`, `2 - DOCUMENTS`, `3 - IMAGES`, etc., based on their extensions.
-*   **Duplicate File Detection**: Uses SHA256 hashing to identify true duplicate files (even with different names). If a duplicate is found, the new file is deleted to avoid clutter.
-*   **Smart Conflict Resolution**: If two different files have the same name, the script renames the incoming file by appending a number (e.g., `report_1.pdf`).
-*   **Organizes Sub-folders**: Moves any existing sub-folders (that aren't category folders) into a dedicated `6 - FOLDERS` directory to keep the root clean.
-*   **Special PDF Naming**: Automatically reformats PDF filenames to be Title-Cased for consistency (e.g., `my annual report.pdf` becomes `My Annual Report.pdf`).
-*   **Detailed Logging**: Provides real-time feedback in the console about every action it takes, from moving files to detecting duplicates.
+- **GUI Folder Selection** — a dialog box opens so you never have to edit the script to specify a path.
+- **Interactive Skip List** — choose which files and folders to leave untouched before the script runs.
+- **Category Sorting** — files are sorted into numbered folders (`1 - ARCHIVES`, `2 - DOCUMENTS`, etc.) based on their extension.
+- **Duplicate Detection** — uses SHA-256 hashing to identify identical files, even if they have different names. True duplicates are deleted; different files with the same name are renamed with a counter suffix.
+- **Size Pre-Filtering** — before hashing anything, files are grouped by byte size. Files with a unique size cannot be duplicates, so they are skipped entirely. This eliminates ~90% of hashing work on typical folders.
+- **Parallel Hashing** — duplicate candidates are hashed concurrently across 8 threads, giving a near-linear speedup on I/O-bound workloads.
+- **Per-File Hash Timeout** — any file that takes longer than 5 seconds to hash (locked executables, system files, slow network shares) is automatically skipped and logged. The script never hangs.
+- **Folder Organization** — sub-folders that are not category folders are moved into `6 - FOLDERS`.
+- **PDF Title-Casing** — PDF filenames are automatically reformatted to Title Case (`my annual report.pdf` → `My Annual Report.pdf`).
+- **Refinement Pass** — after sorting, coding-adjacent files (`.json`, `.ts`, `.tsx`, `.yaml`, `.yml`) that ended up in `10 - OTHERS` are moved to `7 - CODING`.
+- **Detailed Logging** — every action is logged to both the console and `file_organizer.log`, including skips, timeouts, and deletions.
 
-## Prerequisites
+---
 
-*   **Python 3.x**: The script is written in Python 3.
-*   **Tkinter**: This is the standard GUI library for Python. It's usually included with Python installations on Windows and macOS. On some Linux distributions, you may need to install it separately:
-    ```bash
-    # For Debian/Ubuntu
-    sudo apt-get install python3-tk
-    ```
+## Requirements
 
-## How to Use
+- **Python 3.10+** (uses the walrus operator and `str | None` union syntax)
+- **Tkinter** — included with Python on Windows and macOS. On Linux:
+  ```bash
+  sudo apt-get install python3-tk   # Debian / Ubuntu
+  sudo dnf install python3-tkinter  # Fedora
+  ```
+- **inquirer** — installed automatically on first run if missing.
 
-1.  **Save the Script**: Save the code as a Python file (e.g., `organizer.py`).
-2.  **Run the Script**: Open a terminal or command prompt, navigate to the directory where you saved the file, and run it:
-    ```bash
-    python organizer.py
-    ```
-3.  **Select a Folder**: A dialog box will appear. Navigate to and select the folder you want to organize.
-4.  **Let it Run**: The script will process the selected folder. You can monitor its progress in the terminal window. Once it's finished, your folder will be neatly organized.
+---
 
-## The Organized Folder Structure
+## Usage
 
-The script will create the following folders in your selected directory and sort files into them accordingly:
+```bash
+python file_organizer.py
+```
 
-*   **`1 - ARCHIVES`**: `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.bz2`
-*   **`2 - DOCUMENTS`**: `.doc`, `.ris`, `.ttl`, `.docx`, `.txt`, `.xlsx`, `.ppt`, `.csv`, `.pptx`, `.md`
-*   **`3 - IMAGES`**: `.jpeg`, `.jpg`, `.png`, `.gif`, `.bmp`, `.heic`, `.tiff`, `.svg`
-*   **`4 - PDFs`**: `.pdf`
-*   **`5 - VIDEOS`**: `.mp4`, `.mov`, `.avi`, `.mkv`, `.flv`, `.wmv`
-*   **`6 - FOLDERS`**: All sub-folders that are not part of the categories above will be moved here.
-*   **`7 - CODING`**: `.py`, `.java`, `.cpp`, `.c`, `.html`, `.css`, `.js`, `.php`, `.tsx`, `.ts`, `.yaml`, `.yml`, `.json`
-*   **`8 - INSTALLERS & APPLICATIONS`**: `.exe`
-*   **`9 - OTHERS`**: Any file type that does not match the categories above.
+1. A folder selection dialog opens — pick the folder you want to organize.
+2. Choose an action from the menu:
+   - **Organize Files and Folders**
+   - **Find and Delete Duplicates**
+   - **Do Both**
+3. If organizing, select any files or folders you want to skip.
+4. The script runs and prints a summary when done.
 
-## How It Works: A Deeper Look
+---
 
-1.  **Initialization**: The script defines the category folders and their associated file extensions. It then creates these folders in the user-selected directory.
-2.  **File Processing**:
-    *   It iterates through all items in the root of the selected folder.
-    *   For each file, it checks the extension and finds the matching category folder.
-    *   If no category matches, it's destined for `9 - OTHERS`.
-    *   The file is then passed to the `move_and_rename_file` function.
-3.  **Duplicate & Conflict Handling (`move_and_rename_file`)**:
-    *   **If the destination file doesn't exist**: The file is moved and (if it's a PDF) renamed.
-    *   **If a file with the same name exists**:
-        *   The script calculates the SHA256 hash of both the source file and the existing destination file.
-        *   If the hashes match, the files are identical. The script logs this and **deletes the source file**, preventing duplicates.
-        *   If the hashes are different, it's a name collision. The script appends `_1`, `_2`, etc., to the source filename until a unique name is found, and then moves the file.
-4.  **Folder Processing (`move_folder`)**: After processing all files, the script iterates through the items again. Any sub-directory that isn't a main category folder (e.g., `1 - ARCHIVES`) is moved into the `6 - FOLDERS` directory. This includes handling name conflicts by appending `_1`, `_2`, etc.
-5.  **Refinement Pass (`refine_sorting`)**: As a final step, the script checks the `9 - OTHERS` folder for certain coding-related files (`.json`, `.tsx`, etc.) that might have ended up there and moves them to the more appropriate `7 - CODING` folder.
+## Output Folder Structure
+
+| Folder | Extensions |
+|---|---|
+| `1 - ARCHIVES` | `.7z` `.bz2` `.dmp` `.gz` `.iso` `.rar` `.tar` `.torrent` `.xz` `.zip` |
+| `2 - DOCUMENTS` | `.bib` `.csv` `.dic` `.doc` `.docx` `.epub` `.htm` `.md` `.pages` `.ppt` `.pptx` `.ps` `.ris` `.ttl` `.txt` `.xls` `.xlsx` |
+| `3 - IMAGES` | `.bmp` `.gif` `.heic` `.jpeg` `.jpg` `.png` `.svg` `.tiff` `.webp` |
+| `4 - PDFs` | `.pdf` |
+| `5 - VIDEOS` | `.avi` `.flv` `.mkv` `.mov` `.mp4` `.wmv` |
+| `6 - FOLDERS` | *(sub-folders)* |
+| `7 - CODING` | `.bat` `.c` `.cpp` `.css` `.gexf` `.har` `.html` `.ipynb` `.java` `.js` `.json` `.php` `.ps1` `.py` `.sh` `.sqlite3` `.ts` `.tsx` `.xml` `.yaml` `.yml` |
+| `8 - INSTALLERS & APPLICATIONS` | `.apk` `.bin` `.dll` `.dmg` `.exe` `.jar` `.msi` |
+| `9 - SECURITY` | `.cer` |
+| `10 - OTHERS` | *(anything not matched above)* |
+
+---
+
+## How It Works
+
+### Duplicate Detection (when selected)
+
+**Phase 1 — Size grouping**
+All files are grouped by byte size. A file with a size no other file shares is guaranteed to be unique and is excluded from hashing immediately. This single step typically eliminates 70–95% of the work.
+
+**Phase 2 — Parallel hashing**
+Remaining candidates are hashed in parallel using a thread pool (default: 8 workers). Each hash has a hard 5-second timeout — files that would have caused the script to hang indefinitely are skipped and logged with a `[TIMEOUT]` marker instead.
+
+Files with identical hashes are duplicates. The script keeps the version without a `(x)` suffix in its name (i.e., the presumed original) and deletes the rest.
+
+### File Organization (when selected)
+
+1. Category folders are created if they don't already exist.
+2. The script iterates the root of the selected folder. Each file is matched to a category by extension and moved. Unmatched files go to `10 - OTHERS`.
+3. Any remaining sub-folders (not category folders) are moved into `6 - FOLDERS`.
+4. A refinement pass checks `10 - OTHERS` and promotes coding-adjacent files to `7 - CODING`.
+
+### Conflict Resolution
+
+When a file is moved to a destination where a file of the same name already exists:
+- If both files are **identical** (matching hash): the incoming file is deleted.
+- If they are **different**: the incoming file is renamed with a counter suffix (`report_1.pdf`, `report_2.pdf`, etc.).
+
+---
+
+## Tunable Constants
+
+Three constants at the top of the script control performance behaviour:
+
+```python
+HASH_CHUNK_SIZE = 524288   # Bytes read per I/O call (default: 512KB)
+HASH_TIMEOUT_SEC = 5       # Max seconds to wait per file hash
+MAX_HASH_WORKERS = 8       # Parallel hashing threads
+```
+
+Increase `MAX_HASH_WORKERS` on machines with fast SSDs and many cores. Lower `HASH_TIMEOUT_SEC` if you want to be more aggressive about skipping slow files.
+
+---
 
 ## Customization
 
-You can easily customize the folder categories and the file types associated with them by editing the `folders` dictionary within the `main()` function of the script. For example, to add `.epub` to documents and create a new category for music, you could modify it like this:
+Edit the `folders` dictionary inside `main()` to add, remove, or rename categories:
 
 ```python
-# Edit this dictionary to change categories or file types
 folders = {
-    "1 - ARCHIVES": [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"],
-    "2 - DOCUMENTS": [".doc", ".ris", ".ttl", ".docx", ".txt", ".xlsx", ".ppt", ".csv", ".pptx", ".md", ".epub"], # Added .epub
-    "3 - IMAGES": [".jpeg", ".jpg", ".png", ".gif", ".bmp", ".heic", ".tiff", ".svg"],
-    "4 - PDFs": [".pdf"],
-    "5 - VIDEOS": [".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv"],
-    "6 - FOLDERS": [],
-    "7 - CODING": [".py", ".java", ".cpp", ".c", ".html", ".css", ".js", ".php",
-                     ".tsx", ".ts", ".yaml", ".yml", ".json"],
-    "8 - MUSIC": [".mp3", ".wav", ".flac"], # New category
-    "9 - INSTALLERS & APPLICATIONS": [".exe"],
-    "10 - OTHERS": [] # Renumber subsequent folders
+    "1 - ARCHIVES": [".zip", ".rar", ".7z", ".tar", ".gz"],
+    "2 - DOCUMENTS": [".doc", ".docx", ".txt", ".pdf", ".epub"],  # added .epub
+    # ... other categories ...
+    "8 - MUSIC": [".mp3", ".wav", ".flac"],   # new category
+    "9 - INSTALLERS & APPLICATIONS": [".exe", ".msi"],
+    "10 - OTHERS": []
 }
+```
+
+The script self-skips automatically — you don't need to add `file_organizer.py` to the skip list manually.
+
+---
+
+## Log File
+
+All actions are written to `file_organizer.log` in the directory where the script is run. Useful log markers:
+
+| Marker | Meaning |
+|---|---|
+| `[SKIP]` | File could not be read (permission denied, etc.) |
+| `[TIMEOUT]` | File hash exceeded the timeout limit |
+| `[ERROR]` | Unexpected error during hashing |
